@@ -11,14 +11,15 @@ from pathlib import Path
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from pydantic import ValidationError
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field, ValidationError
 
 from portalguard import browser
-from portalguard.config import MAX_SUBAGENT_STEPS, REQUIRED_JOURNEYS
+from portalguard.config import MAX_DIFF_CHECKS, MAX_SUBAGENT_STEPS, REQUIRED_JOURNEYS
 from portalguard.coverage import check_journey
 from portalguard.llm import model_name, usage_cost, with_api_retries
 from portalguard.safety import Budget, BudgetExceeded
-from portalguard.tools import SUBAGENT_TOOLS, run_tests, write_test
+from portalguard.tools import SUBAGENT_TOOLS, Journey, run_tests, write_test
 from portalguard.triage import lock_violation
 
 MAX_TOOL_RESULT_CHARS = 6_000
@@ -43,14 +44,73 @@ class RunContext:
         return reply
 
 
-def todo(journey: str, goal: str, index: int = 0) -> dict:
+def todo(journey: str, goal: str, index: int = 0, source: str = "planner") -> dict:
     filename = f"test_{journey}.py" if journey != "diff_check" else f"test_diff_check_{index}.py"
     return {"id": filename.removesuffix(".py").removeprefix("test_"), "journey": journey,
-            "filename": filename, "goal": goal}
+            "filename": filename, "goal": goal, "source": source}
 
 
-def default_plan() -> list[dict]:
-    return [todo(j, f"Test the {j.replace('_', ' ')} journey on the baseline spec") for j in REQUIRED_JOURNEYS]
+def default_goal(journey: str) -> str:
+    return f"Test the {journey.replace('_', ' ')} journey on the baseline spec"
+
+
+# ---------------------------------------------------------------- planner
+
+class TodoItem(BaseModel):
+    journey: Journey
+    goal: str = Field(max_length=300, description="What the test must check, in one sentence")
+
+
+@tool
+def write_todos(todos: list[TodoItem]) -> str:
+    """Write the QE to-do list: one item per journey, plus diff_check items for snapshot diffs."""
+    return f"{len(todos)} to-dos written"
+
+
+PLANNER_PROMPT = """You are the PortalGuard planner for QE of a patient portal release (synthetic data only).
+Write the to-do list with write_todos. Each to-do is handed to its own sub-agent, which writes and
+runs ONE Playwright test file. Include exactly one to-do for each journey: sign_in, wrong_password,
+appointments, lab_results, download_pdf. Then add up to {max_diff} diff_check to-dos, each about one
+snapshot diff line that no journey test would catch. Goals say what to check, in one sentence,
+using accessible names from the baseline (tests must pass on the baseline)."""
+
+
+def plan_with_llm(ctx: RunContext, snapshots: dict, diff: dict | None) -> tuple[list[dict], list[str]]:
+    """The planner writes the to-do list; the harness enforces coverage and limits. Returns (todos, notes)."""
+    brief = task_brief({"journey": "(planning)", "filename": "(none)", "goal": "plan the to-do list"},
+                       snapshots, diff)
+    model = ctx.model.bind_tools([write_todos], tool_choice="write_todos")
+    messages = [SystemMessage(PLANNER_PROMPT.format(max_diff=MAX_DIFF_CHECKS)), HumanMessage(brief)]
+    notes, items = [], []
+    try:
+        reply = ctx.call_model(model, messages)
+        call = next(c for c in reply.tool_calls if c["name"] == "write_todos")
+        items = write_todos.args_schema.model_validate(call["args"]).todos  # argument validation
+    except (BudgetExceeded, StopIteration, ValidationError) as e:
+        notes.append(f"planner output unusable ({type(e).__name__}); using the default plan")
+    except Exception as e:  # API down after retries
+        notes.append(f"planner failed ({type(e).__name__}: {e}); using the default plan")
+
+    # Coverage check on the plan: every required journey exactly once, diff checks capped.
+    goals = {}
+    diff_checks = []
+    for item in items:
+        if item.journey == "diff_check":
+            diff_checks.append(item.goal)
+        else:
+            goals.setdefault(item.journey, item.goal)
+    todos = []
+    for journey in REQUIRED_JOURNEYS:
+        if journey in goals:
+            todos.append(todo(journey, goals[journey]))
+        else:
+            todos.append(todo(journey, default_goal(journey), source="harness"))
+            if items:
+                notes.append(f"planner skipped required journey {journey}; harness added it")
+    if len(diff_checks) > MAX_DIFF_CHECKS:
+        notes.append(f"planner asked for {len(diff_checks)} diff checks; kept {MAX_DIFF_CHECKS}")
+    todos += [todo("diff_check", goal, i) for i, goal in enumerate(diff_checks[:MAX_DIFF_CHECKS], 1)]
+    return todos, notes
 
 
 # ---------------------------------------------------------------- journey sub-agent

@@ -82,7 +82,9 @@ def write_report(state: dict, bugs: list[dict], model: str, usage: dict) -> Path
 
     lines += ["", "## Plan and journey coverage", ""]
     lines += [f"- [{'x' if t['filename'] in state.get('files', {}) else ' '}] `{t['filename']}` "
-              f"({t['journey']}): {t['goal']}" for t in state.get("todos", [])]
+              f"({t['journey']}{', added by harness' if t.get('source') == 'harness' else ''}): {t['goal']}"
+              for t in state.get("todos", [])]
+    lines += [f"- Plan note: {note}" for note in state.get("plan_notes", [])]
     lines += ["", f"- Missing journeys: {', '.join(missing) or 'none'}"
               + (" (no accepted test, so bugs there could be missed)" if missing else "")]
     errors = [r for r in state.get("journey_results", []) if r.get("error")]

@@ -47,6 +47,15 @@ def ensure_portal() -> str:
     return "started on a background thread"
 
 
+def keep_awake() -> None:
+    """Windows: keep the machine (and display: Modern Standby ignores the system flag alone) awake
+    while a run is in progress, so idle sleep cannot freeze browsers mid-test. Ends with the process."""
+    if sys.platform == "win32":
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+
+
 def checkpointer() -> SqliteSaver:
     RUNS_DIR.mkdir(exist_ok=True)
     return SqliteSaver(sqlite3.connect(CHECKPOINT_DB, check_same_thread=False))
@@ -59,6 +68,7 @@ def run_qe(release_url: str, mock: bool = True, baseline_url: str = GOOD_URL, au
     check_url(release_url)
     run_id = run_id or f"{datetime.now():%Y%m%d-%H%M%S}-{'mock' if mock else 'real'}"
     run_dir = RUNS_DIR / run_id
+    keep_awake()
     context = RunContext(model=make_model(mock), budget=Budget(), retry_backoff=retry_backoff)
     config = {"configurable": {"thread_id": run_id}, "max_concurrency": MAX_PARALLEL}
     app = build_graph(checkpointer())
