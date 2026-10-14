@@ -2,7 +2,7 @@
 
     snapshot -> compare -> planner --Send x N--> journey (sub-agents, in parallel) -> triage
     triage --(broken tests with heal attempts left)--Send--> journey      (heal round)
-    triage --(nothing left to heal)--> report
+    triage --(nothing left to heal)--> approve (human in the loop: interrupt) -> report
 
 Deep-agent pattern: the planner writes a to-do list; each to-do becomes its own sub-agent with a
 fresh context, fanned out with the Send API and joined again at triage.
@@ -18,7 +18,7 @@ from typing import Annotated, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
-from langgraph.types import Send
+from langgraph.types import Send, interrupt
 
 from portalguard import browser
 from portalguard.agents import RunContext, plan_with_llm, run_journey
@@ -49,6 +49,7 @@ class QEState(TypedDict, total=False):
     harness_runs: int                 # test runs triage did itself (baseline + reruns)
     usage: dict                       # budget snapshot: steps, tokens, cost_usd
     stop_reason: Optional[str]
+    approval: dict                    # {"approved", "by", "note"} from the human (or --auto-approve)
     bugs: list[dict]
     report: str
 
@@ -125,6 +126,26 @@ def triage(state: QEState, runtime: Runtime[RunContext]) -> dict:
             "stop_reason": stop_reason}
 
 
+def approve(state: QEState) -> dict:
+    """Human in the loop: pause before the report is published. Resumed with Command(resume=...)."""
+    if state.get("auto_approve"):
+        return {"approval": {"approved": True, "by": "--auto-approve"}}
+    tests = state.get("tests", {}).values()
+    decision = interrupt({
+        "question": "Publish this QE report?",
+        "run_id": state["run_id"],
+        "release_url": state["release_url"],
+        "bugs": [{"title": b["title"], "type": b["category"], "tests": b["tests"]}
+                 for b in group_bugs(state.get("tests", {}))],
+        "needs_review": sorted(r["test"] for r in tests if r["verdict"] in ("unconfirmed", "gave_up", "broken_test")),
+        "healed": sorted(r["test"] for r in tests if r.get("healed")),
+    })
+    if not isinstance(decision, dict):
+        decision = {"approved": bool(decision)}
+    return {"approval": {"approved": bool(decision.get("approved")), "by": decision.get("by", "human reviewer"),
+                         "note": decision.get("note", "")}}
+
+
 def report(state: QEState, runtime: Runtime[RunContext]) -> dict:
     bugs = group_bugs(state.get("tests", {}))
     path = write_report(state, bugs, runtime.context.model_name, runtime.context.budget.snapshot())
@@ -150,19 +171,21 @@ def fan_out(state: QEState) -> list[Send]:
 
 def after_triage(state: QEState):
     """Triage as a conditional edge: heal broken tests (new sub-agents), or move on."""
-    return _send(state, state["tasks"]) if state.get("tasks") else "report"
+    return _send(state, state["tasks"]) if state.get("tasks") else "approve"
 
 
 def build_graph(checkpointer=None):
     graph = StateGraph(QEState, context_schema=RunContext)
     for name, node in (("snapshot", snapshot), ("compare", compare), ("planner", planner),
-                       ("journey", journey), ("triage", triage), ("report", report)):
+                       ("journey", journey), ("triage", triage), ("approve", approve),
+                       ("report", report)):
         graph.add_node(name, node)
     graph.add_edge(START, "snapshot")
     graph.add_conditional_edges("snapshot", after_snapshot, ["compare", "report"])
     graph.add_edge("compare", "planner")
     graph.add_conditional_edges("planner", fan_out, ["journey"])
     graph.add_edge("journey", "triage")  # waits for every parallel sub-agent
-    graph.add_conditional_edges("triage", after_triage, ["journey", "report"])
+    graph.add_conditional_edges("triage", after_triage, ["journey", "approve"])
+    graph.add_edge("approve", "report")
     graph.add_edge("report", END)
     return graph.compile(checkpointer=checkpointer)
