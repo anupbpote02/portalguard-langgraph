@@ -19,7 +19,7 @@ from datetime import datetime
 from evals.scoring import EVALUATORS, match_bugs
 from portalguard.config import BUGGY_URL, GOOD_URL, REPO_ROOT
 from portalguard.main import ensure_portal, run_qe
-from portalguard.tracing import flush, setup_tracing
+from portalguard.tracing import flush, in_project, project, setup_tracing
 
 EVALS_DIR = REPO_ROOT / "evals"
 DATASET = "portalguard-releases"
@@ -44,10 +44,12 @@ def make_target(mock: bool, stamp: str, log: list):
     def target(inputs: dict) -> dict:
         release = inputs["release"]
         print(f"  running the agent on {release} ...", flush=True)
-        state = run_qe(RELEASES[release], mock=mock, auto_approve=True,
-                       run_id=f"eval-{stamp}-{'mock' if mock else 'real'}-{release}")
+        run_id = f"eval-{stamp}-{'mock' if mock else 'real'}-{release}"
+        with in_project():  # full QE trace in the main project; the experiment keeps outputs + scores
+            state = run_qe(RELEASES[release], mock=mock, auto_approve=True, run_id=run_id)
         usage = state.get("usage", {})
-        outputs = {"bugs": state.get("bugs", []), "stop_reason": state.get("stop_reason"),
+        outputs = {"run_id": run_id, "trace_project": project(),
+                   "bugs": state.get("bugs", []), "stop_reason": state.get("stop_reason"),
                    "steps": usage.get("steps", 0), "tokens": usage.get("tokens", 0),
                    "cost_usd": usage.get("cost_usd", 0.0), "report": state.get("report"),
                    "healed": sum(1 for r in state.get("tests", {}).values() if r.get("healed"))}
@@ -120,6 +122,7 @@ def main() -> int:
     target = make_target(not args.real, stamp, log)
     experiment = None
     if use_langsmith:
+        print(f"QE run traces: LangSmith project {project()}; scores: the experiment below.")
         from langsmith import Client, evaluate
         client = Client()
         result = evaluate(target, data=ensure_dataset(client), evaluators=EVALUATORS,

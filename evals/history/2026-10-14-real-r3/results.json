@@ -1,0 +1,66 @@
+{
+  "mode": "real",
+  "experiment": "portalguard-real-0c82d801",
+  "started_at": "2026-10-14T17:48:51",
+  "totals": {
+    "recall": 0.75,
+    "precision": 1.0,
+    "type_accuracy": 1.0,
+    "false_alarms_on_good": 0,
+    "steps": 56,
+    "tokens": 88386,
+    "cost_usd": 0.048381,
+    "healed": 4
+  },
+  "match": {
+    "found": {
+      "BUG-1": "CHANGED: button \"Sign in\"  ->  button (no accessible name) (sign-in / main)",
+      "BUG-4": "Download lab results PDF journey broken (test_download_pdf.py::test_download_pdf)",
+      "BUG-2": "REMOVED: heading \"Upcoming appointments\" [level=2] (dashboard / main)"
+    },
+    "missed": [
+      "BUG-3"
+    ],
+    "duplicates": [],
+    "false_positives": [],
+    "recall": 0.75,
+    "precision": 1.0,
+    "type_accuracy": 1.0
+  },
+  "good_bug_titles": [],
+  "runs": [
+    {
+      "release": "good",
+      "run_id": "eval-20261014-174851-real-good",
+      "trace_project": "portalguard-langgraph",
+      "stop_reason": "done",
+      "steps": 27,
+      "tokens": 42885,
+      "cost_usd": 0.023575,
+      "report": "runs/eval-20261014-174851-real-good/report.md",
+      "healed": 3,
+      "bugs": []
+    },
+    {
+      "release": "buggy",
+      "run_id": "eval-20261014-174851-real-buggy",
+      "trace_project": "portalguard-langgraph",
+      "stop_reason": "done",
+      "steps": 29,
+      "tokens": 45501,
+      "cost_usd": 0.024806,
+      "report": "runs/eval-20261014-174851-real-buggy/report.md",
+      "healed": 1,
+      "bugs": [
+        "CHANGED: button \"Sign in\"  ->  button (no accessible name) (sign-in / main)",
+        "Download lab results PDF journey broken (test_download_pdf.py::test_download_pdf)",
+        "REMOVED: heading \"Upcoming appointments\" [level=2] (dashboard / main)"
+      ]
+    }
+  ],
+  "gate": {
+    "min_recall": 1.0,
+    "max_false_alarms": 0,
+    "passed": false
+  }
+}

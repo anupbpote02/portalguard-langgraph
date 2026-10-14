@@ -79,7 +79,7 @@ flowchart TD
 | State + resume | `main.checkpointer` | `SqliteSaver` (thread id = run id) |
 | Human in the loop | `graph.approve`, `main.resume_qe` | `interrupt()` + `Command(resume=...)`; `--auto-approve` for CI/evals |
 | API retries | `llm.with_api_retries` | `Runnable.with_retry` on transient OpenAI errors only |
-| Observability | `tracing.py` | LangSmith tracing on every run (nodes, LLM calls, tools, `@traceable` pytest runs) with run name, tags and metadata |
+| Observability | `tracing.py` | LangSmith tracing on every run (nodes, LLM calls, tools, `@traceable` pytest runs) with run name, tags and metadata, all in one project (`LANGSMITH_PROJECT`), eval runs included |
 | Evals | `evals/run_eval.py` | LangSmith dataset `portalguard-releases` + `evaluate()` experiment with deterministic evaluators |
 | iframe a11y diff | `browser.take_snapshot` | Playwright `aria_snapshot()` of body + every frame, keyed by iframe id |
 | CI | `.github/workflows/qe.yml` | unit tests + mock eval gate on every push; real eval by hand |
@@ -108,9 +108,14 @@ LLM judge.
 |---|---|---|---|---|---|---|
 | Mock (CI gate) | 100% (4/4) | 100% | 0 | 34 | 28.9k (estimated) | $0 |
 | gpt-4.1-mini, run 1 (LangSmith `portalguard-real-2ca49ffe`) | 75% (3/4) | 100% | 0 | 57 | 79.6k | $0.044 |
-| **gpt-4.1-mini, run 2, after prompt fix** (`portalguard-real-8eee9e05`) | **75% (3/4)** | **100%** | **0** | 65 | 111.1k | **$0.062** |
+| gpt-4.1-mini, run 2, after prompt fix (`portalguard-real-8eee9e05`) | 75% (3/4) | 100% | 0 | 65 | 111.1k | $0.062 |
+| **gpt-4.1-mini, run 3, same prompts** (`portalguard-real-0c82d801`) | **75% (3/4)** | **100%** | **0** | 56 | 88.4k | **$0.048** |
 
-Both real runs missed BUG-3 (the iframe heading), for different reasons:
+QE run traces (every node, LLM call, tool call and pytest run) are in the LangSmith project
+`portalguard-langgraph`, for both CLI and eval runs (run 3 onwards for evals). The experiment holds
+the scores, plus each run's `run_id` to find its trace.
+
+All three real runs missed BUG-3 (the iframe heading), each for a different reason:
 
 - **Run 1:** the lab-results sub-agent took the diff line `REMOVED: heading "Lab results"` as the
   new spec, so it skipped the heading. It also called `expect()` on a FrameLocator, so the test failed
@@ -119,10 +124,13 @@ Both real runs missed BUG-3 (the iframe heading), for different reasons:
 - **Run 2:** the fix worked. The test now checks the heading correctly inside the frame. But its last
   line, `to_have_count(lambda c: c >= 1)`, is invalid (Playwright takes an int), so the test still
   failed on the baseline. The model kept that line through all 3 heals.
+- **Run 3:** a diff check did check the iframe heading correctly. But it checked the appointments
+  heading (BUG-2) first, and pytest stops at the first failure, so the test only proved BUG-2. The
+  lab-results journey test used a made-up CSS class and gave up after 3 heals.
 
-Both times the harness held up: no false bug, and the broken test went to "Needs human review". I
-stopped tuning here; this is a known limitation (see below). Details:
-`evals/history/2026-10-14-real-r1/analysis.md` and `evals/history/2026-10-14-real-r2/analysis.md`.
+Every time, the harness held up: no false bug, and broken tests went to "Needs human review". I
+stopped tuning here; this is a known limitation (see below). Details: `analysis.md` in
+`evals/history/2026-10-14-real-r1`, `-r2` and `-r3`.
 
 ## Healthcare notes
 
@@ -138,15 +146,15 @@ stopped tuning here; this is a known limitation (see below). Details:
 
 ## Limitations and next steps
 
-- **Known miss: BUG-3 (iframe heading) with gpt-4.1-mini, 0 of 2 real runs.** The lab-results
-  journey test checks the heading together with other assertions. One invalid assertion makes the
-  whole test fail on the baseline, and heals don't reliably remove it. The test is then flagged for
-  review, not reported as a bug. Possible fixes (not done): one assertion per diff-check test, a
-  guaranteed diff check for every iframe diff, or an AST check for non-literal `to_have_count`
+- **Known miss: BUG-3 (iframe heading) with gpt-4.1-mini, 0 of 3 real runs.** In two of them the
+  agent wrote a correct check for it, but another assertion in the same test hid it. In r2 an invalid
+  assertion failed on the baseline; in r3 an earlier assertion failed on the release, so pytest stopped
+  first. Possible fixes (not done): one diff line per diff-check test (or collect every failure), a
+  guaranteed diff check for every iframe diff, and an AST check for non-literal `to_have_count`
   arguments.
 - In "Needs human review", the report quotes the release error for tests that gave up. For those,
   the baseline error (stored as `baseline_error`) is the useful one.
-- The real model varies run to run; two real evals are a sample, not a benchmark. Next: 3–5 repeats
+- The real model varies run to run; three real evals are a sample, not a benchmark. Next: 3–5 repeats
   per prompt change, tracked as LangSmith experiments.
 - Parallel sub-agents only speed up the write-and-run phase. Triage's baseline runs and reruns are
   sequential, so a mock run takes about 2 minutes either way. Triage could fan out per file too.

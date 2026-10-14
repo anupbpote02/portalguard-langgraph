@@ -31,6 +31,20 @@ def run_config(run_id: str, release_url: str, mock: bool) -> dict:
             "metadata": {"run_id": run_id, "release_url": release_url, "mode": "mock" if mock else "real"}}
 
 
+def project() -> str:
+    return os.environ.get("LANGSMITH_PROJECT", DEFAULT_PROJECT)
+
+
+def in_project():
+    """Trace the enclosed work as a new root run in the main project.
+
+    langsmith.evaluate() nests everything the target does under the experiment's own project. This
+    keeps every QE run in the same LangSmith project, whether it came from the CLI or an eval.
+    """
+    from langsmith import tracing_context
+    return tracing_context(project_name=project(), parent=False)
+
+
 def flush() -> None:
     """Send pending traces before the process exits."""
     from langchain_core.tracers.langchain import wait_for_all_tracers
