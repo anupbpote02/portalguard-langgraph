@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Agent run output (snapshots, generated tests, reports, checkpoints)
+runs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Playwright
+test-results/
+
+# Eval output (regenerated each run)
+evals/results.json
+evals/results.md
+
+# Local Claude Code settings
+.claude/
