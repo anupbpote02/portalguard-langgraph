@@ -71,7 +71,7 @@ PLANNER_PROMPT = """You are the PortalGuard planner for QE of a patient portal r
 Write the to-do list with write_todos. Each to-do is handed to its own sub-agent, which writes and
 runs ONE Playwright test file. Include exactly one to-do for each journey: sign_in, wrong_password,
 appointments, lab_results, download_pdf. Then add up to {max_diff} diff_check to-dos, each about one
-snapshot diff line that no journey test would catch. Goals say what to check, in one sentence,
+snapshot diff line that no journey test would catch (diffs inside iframes count too). Goals say what to check, in one sentence,
 using accessible names from the baseline (tests must pass on the baseline)."""
 
 
@@ -120,15 +120,20 @@ All data is synthetic. You own exactly ONE test file (given below). Do this:
 1. write_test that file, with the given journey argument.
 2. run_tests on that file (it runs against the release under test). Then stop.
 If write_test is rejected, read the reason, fix the code and call write_test again.
-Do not try to make a test pass on the release: tests describe the BASELINE (last good release),
-so a failure on the release may be a real bug. The harness decides what failures mean.
+Tests describe the BASELINE (last good release), never the release. Do not try to make a test pass
+on the release: a failure there may be a real bug, and the harness decides what failures mean.
+The snapshot diff lists what the RELEASE changed: a REMOVED line exists on the baseline and is missing
+in the release, so if it belongs to your journey your test SHOULD check it.
 
 Test rules: Python, pytest + Playwright sync API, only import from playwright.sync_api / pytest / re / json.
-Fixtures: page, base_url (ends with "/"), patient (dict: email, password, name, mrn, appointments,
-labResults), signed_in (page already on the dashboard). The sign-in page is base_url + "index.html".
+Fixtures: page, base_url (ends with "/"), patient (dict: email, password, name, mrn, appointments =
+list of strings, labResults = list of {"test", "result", "range", "date"}), signed_in (page already on
+the dashboard; use it instead of page). The sign-in page is base_url + "index.html".
 Use get_by_role / get_by_label locators with names from the baseline summary; don't guess them.
 Pass name as a keyword: get_by_role("button", name="Sign in").
-Assert with expect(...) (it waits), e.g. expect(locator).to_be_visible(), expect(page).to_have_url(...).
+Assert with expect(...) (it waits) on a Locator or Page only, e.g. expect(locator).to_be_visible(),
+expect(page).to_have_url(base_url + "dashboard.html") (a string or re.compile(...), never a function).
+Never expect() a frame_locator itself: use frame.locator("body") or frame.get_by_role(...).
 Never assert locator.is_visible(): it does not wait.
 Lab results are inside page.frame_locator("#lab-results-frame"). Check downloads with
 page.expect_download() and suggested_filename == f"lab-results-{patient['mrn']}.pdf".
@@ -154,7 +159,8 @@ def task_brief(task: dict, snapshots: dict, diff: dict | None) -> str:
             lines.append(f"Keep these tests unchanged (they prove real bugs): {', '.join(task['locked'])}")
     lines += ["", "Baseline accessible names per page / frame (tests must pass on the baseline):",
               json.dumps(names, indent=1),
-              "", "Snapshot diff baseline -> release:", json.dumps((diff or {}).get("changes", {}), indent=1)]
+              "", "Snapshot diff (what the release changed; REMOVED = on the baseline, missing in the release):",
+              json.dumps((diff or {}).get("changes", {}), indent=1)]
     return "\n".join(lines)
 
 
