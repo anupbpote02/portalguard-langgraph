@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
+from langsmith import traceable
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
@@ -265,6 +266,7 @@ def _short_failure(element) -> str:
     return (prefix + (" | ".join(lines) or element.get("message", "failed")))[:MAX_ERROR_CHARS]
 
 
+@traceable(name="pytest", run_type="tool")
 def run_pytest(base_url: str, tests_dir: Path, results_dir: Path, filename: str | None = None,
                test_name: str | None = None) -> dict:
     """Run generated tests against one release; pass/fail from pytest's JUnit XML, never from the LLM."""

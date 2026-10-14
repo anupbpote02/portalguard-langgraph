@@ -22,15 +22,15 @@ from datetime import datetime
 from typing import Callable, Optional
 from urllib.error import URLError
 
-from dotenv import load_dotenv
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from portalguard.agents import RunContext
-from portalguard.config import BUGGY_URL, CHECKPOINT_DB, GOOD_URL, MAX_PARALLEL, PORT, PORTAL_DIR, REPO_ROOT, RUNS_DIR
+from portalguard.config import BUGGY_URL, CHECKPOINT_DB, GOOD_URL, MAX_PARALLEL, PORT, PORTAL_DIR, RUNS_DIR
 from portalguard.graph import build_graph
 from portalguard.llm import make_model
 from portalguard.safety import Budget, check_url
+from portalguard.tracing import flush, run_config, setup_tracing
 
 RELEASES = {"good": GOOD_URL, "buggy": BUGGY_URL}
 
@@ -89,7 +89,8 @@ def run_qe(release_url: str, mock: bool = True, baseline_url: str = GOOD_URL, au
     run_id = run_id or f"{datetime.now():%Y%m%d-%H%M%S}-{'mock' if mock else 'real'}"
     keep_awake()
     context = RunContext(model=make_model(mock), budget=Budget(), retry_backoff=retry_backoff)
-    config = {"configurable": {"thread_id": run_id}, "max_concurrency": MAX_PARALLEL}
+    config = {"configurable": {"thread_id": run_id}, "max_concurrency": MAX_PARALLEL,
+              **run_config(run_id, release_url, mock)}
     first = {"run_id": run_id, "run_dir": str(RUNS_DIR / run_id), "baseline_url": baseline_url,
              "release_url": release_url, "mock": mock, "auto_approve": auto_approve}
     return _drive(build_graph(checkpointer()), config, context, first, approver)
@@ -103,6 +104,7 @@ def resume_qe(run_id: str, approver: Approver) -> dict:
     if not saved.next:
         raise ValueError(f"run {run_id} is not waiting for approval (no checkpoint, or already finished)")
     values = saved.values
+    config |= run_config(run_id, values["release_url"], values["mock"])
     context = RunContext(model=make_model(values["mock"]), budget=Budget(used=values.get("usage")))
     return _drive(app, config, context, Command(resume=approver(saved.tasks[0].interrupts[0].value)), approver)
 
@@ -161,7 +163,7 @@ def main() -> int:
     parser.add_argument("--resume", metavar="RUN_ID", help="resume a run paused at the approval step")
     args = parser.parse_args()
 
-    load_dotenv(REPO_ROOT / ".env")
+    print(setup_tracing())
     try:
         if args.resume:
             print(f"Portal: {ensure_portal()}. Resuming {args.resume}")
@@ -174,6 +176,8 @@ def main() -> int:
     except (RuntimeError, ValueError) as e:  # missing API key, URL not allowed, nothing to resume
         print(e)
         return 1
+    finally:
+        flush()
     print_summary(state)
     return exit_code(state)
 
