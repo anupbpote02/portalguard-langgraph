@@ -86,10 +86,16 @@ Good: http://localhost:8000/good/, buggy: http://localhost:8000/buggy/.
 
 ## Phases
 
-1. Setup: branch main, requirements, .env.example, .gitignore, CLAUDE.md, settings.
-2. LangChain: ChatOpenAI + @tool tools + mock fake chat model.
-3. LangGraph: StateGraph QE loop, safety rules in nodes, checkpointer.
-4. Deep-agent pattern: planner to-do list + parallel journey sub-agents via Send.
-5. Human in the loop: interrupt before report; `--auto-approve`.
-6. LangSmith: tracing; eval dataset + experiment (recall, precision, false alarms); one real eval.
-7. GitHub Actions CI (mock) + README.
+1. Setup: branch main, requirements, .env.example, .gitignore, CLAUDE.md, settings. ✅
+2. LangChain: ChatOpenAI + @tool tools + mock fake chat model. ✅
+3. LangGraph: StateGraph QE loop, safety rules in nodes, checkpointer. ✅
+4. Deep-agent pattern: planner to-do list + parallel journey sub-agents via Send. ✅
+5. Human in the loop: interrupt before report; `--auto-approve`. ✅
+6. LangSmith: tracing; eval dataset + experiment (recall, precision, false alarms); one real eval. ✅
+7. GitHub Actions CI (mock) + README. ✅
+
+## Status (2026-10-14)
+
+All phases done. Mock eval: 100% recall, 0 false alarms. Real eval r1 (gpt-4.1-mini): 75% recall
+(BUG-3 missed), 100% precision, 0 false alarms, $0.044; prompt fix committed, not yet re-evaluated
+(see evals/history/2026-10-14-real-r1/analysis.md). Parallel Send kept (no issues).

@@ -1,0 +1,78 @@
+# PortalGuard CI: unit tests + mock eval gate on every push / PR ($0, no API keys).
+# The real gpt-4.1-mini eval only runs when started by hand (Actions tab -> Run workflow).
+name: PortalGuard QE
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      real_eval:
+        description: "Also run the real eval with gpt-4.1-mini (uses secrets.OPENAI_API_KEY, ~$0.05)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Unit tests (one per safety rule, no browser, no keys)
+        run: python -m pytest tests/unit -q -p no:cacheprovider --junitxml=reports/unit-tests.xml
+
+      # The eval serves portal/ itself on localhost:8000 and runs the full LangGraph QE graph twice
+      # (buggy + good) with the scripted fake chat model. Fails the build if recall < 100% or any false alarm.
+      - name: Mock eval (gate)
+        run: python -m evals.run_eval --local
+
+      - name: Real eval (manual runs only, not a gate)
+        if: github.event_name == 'workflow_dispatch' && inputs.real_eval
+        continue-on-error: true  # the real model varies run to run; report it, don't block on it
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_PROJECT: portalguard-ci
+        run: |
+          mkdir -p eval-output/mock && cp evals/results.* eval-output/mock/
+          python -m evals.run_eval --real
+
+      - name: Job summary
+        if: always()
+        run: cat evals/results.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "No eval results." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portalguard-qe-${{ github.run_number }}
+          path: |
+            runs/eval-*/report.md
+            runs/eval-*/tests/
+            evals/results.*
+            eval-output/
+            reports/
+          if-no-files-found: warn
+          retention-days: 14
