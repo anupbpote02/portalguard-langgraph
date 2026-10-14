@@ -96,6 +96,8 @@ Good: http://localhost:8000/good/, buggy: http://localhost:8000/buggy/.
 
 ## Status (2026-10-14)
 
-All phases done. Mock eval: 100% recall, 0 false alarms. Real eval r1 (gpt-4.1-mini): 75% recall
-(BUG-3 missed), 100% precision, 0 false alarms, $0.044; prompt fix committed, not yet re-evaluated
-(see evals/history/2026-10-14-real-r1/analysis.md). Parallel Send kept (no issues).
+All phases done. Mock eval: 100% recall, 0 false alarms. Real evals (gpt-4.1-mini): r1 75% recall,
+100% precision, 0 false alarms, $0.044; r2 (after the prompt fix) 75% / 100% / 0, $0.062. BUG-3 was
+missed both times. In r2 the heading check was right, but an invalid `to_have_count(lambda)` line made
+the test fail on the baseline. Documented as a known limitation; no further tuning (see
+evals/history/2026-10-14-real-r2/analysis.md). Parallel Send kept (no issues).

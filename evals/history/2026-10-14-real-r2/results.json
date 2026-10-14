@@ -1,0 +1,62 @@
+{
+  "mode": "real",
+  "experiment": "portalguard-real-8eee9e05",
+  "started_at": "2026-10-14T17:33:22",
+  "totals": {
+    "recall": 0.75,
+    "precision": 1.0,
+    "type_accuracy": 1.0,
+    "false_alarms_on_good": 0,
+    "steps": 65,
+    "tokens": 111099,
+    "cost_usd": 0.061875,
+    "healed": 1
+  },
+  "match": {
+    "found": {
+      "BUG-1": "CHANGED: button \"Sign in\"  ->  button (no accessible name) (sign-in / main)",
+      "BUG-2": "REMOVED: heading \"Upcoming appointments\" [level=2] (dashboard / main)",
+      "BUG-4": "Download lab results PDF journey broken (test_download_pdf.py::test_download_pdf)"
+    },
+    "missed": [
+      "BUG-3"
+    ],
+    "duplicates": [],
+    "false_positives": [],
+    "recall": 0.75,
+    "precision": 1.0,
+    "type_accuracy": 1.0
+  },
+  "good_bug_titles": [],
+  "runs": [
+    {
+      "release": "good",
+      "stop_reason": "done",
+      "steps": 35,
+      "tokens": 64331,
+      "cost_usd": 0.03646,
+      "report": "runs/eval-20261014-173322-real-good/report.md",
+      "healed": 0,
+      "bugs": []
+    },
+    {
+      "release": "buggy",
+      "stop_reason": "done",
+      "steps": 30,
+      "tokens": 46768,
+      "cost_usd": 0.025415,
+      "report": "runs/eval-20261014-173322-real-buggy/report.md",
+      "healed": 1,
+      "bugs": [
+        "CHANGED: button \"Sign in\"  ->  button (no accessible name) (sign-in / main)",
+        "REMOVED: heading \"Upcoming appointments\" [level=2] (dashboard / main)",
+        "Download lab results PDF journey broken (test_download_pdf.py::test_download_pdf)"
+      ]
+    }
+  ],
+  "gate": {
+    "min_recall": 1.0,
+    "max_false_alarms": 0,
+    "passed": false
+  }
+}
