@@ -1,168 +1,162 @@
 # PortalGuard
 
-**An AI QE agent that tests every release of a hospital patient portal, built on LangChain,
-LangGraph and LangSmith.** It diffs the accessibility tree of each page *and every iframe* against
-the last good release, plans the journeys to test, gives each journey its own sub-agent (in
-parallel) to write and run a Playwright test, triages every failure against the baseline, heals its
-own broken tests, and asks a human to approve before it publishes a bug report.
+[![PortalGuard QE](https://github.com/anupbpote02/portalguard-langgraph/actions/workflows/qe.yml/badge.svg)](https://github.com/anupbpote02/portalguard-langgraph/actions/workflows/qe.yml)
 
-The model proposes; the harness decides. Pass/fail comes from Playwright, verdicts come from
-deterministic triage, and the report is built from graph state, never from model text.
+## What is PortalGuard?
 
-The portal is a fictional "Harbor General Patient Portal" with synthetic patients only. A buggy
-release carries four planted bugs: three accessibility regressions (one inside an iframe) and one
-functional bug.
+PortalGuard is a team of AI helpers that tests a hospital patient portal (the website where patients
+sign in to see appointments and lab results) every time it's updated. It finds what broke, checks
+its own work, and writes a bug report for a person to approve. It's built with three open-source
+tools: LangChain, LangGraph and LangSmith.
 
-## Quick start
+## Why it matters
 
-```bash
-python -m venv .venv && .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-python -m playwright install chromium
-cp .env.example .env                                     # only needed for --real and LangSmith
+A small update can quietly break the portal for patients. Blind patients use screen readers (apps
+that read the page aloud), so a button with no label or a missing heading can lock them out. Bugs
+also hide inside iframes (a page embedded inside another page, like the lab results box), where many
+testing tools never look.
 
-python -m portalguard.main --mock                        # $0, no keys: QE run on the buggy release
-python -m portalguard.main --real --release buggy        # gpt-4.1-mini
-python -m portalguard.main --mock --release good --auto-approve
-python -m portalguard.main --resume <run_id>             # finish a run paused for approval
+## How it works
 
-python -m pytest tests/unit -q                           # one test per safety rule, no browser needed
-python -m evals.run_eval                                 # LangSmith experiment (mock); --real for gpt-4.1-mini
-python -m evals.run_eval --local                         # same scoring without LangSmith (what CI runs)
-```
+1. **Snapshot:** take a "snapshot" of each page as a screen reader sees it (the accessibility tree),
+   including inside every iframe, for the last good version and the new one.
+2. **Compare:** list everything that changed between the two snapshots.
+3. **Planner:** an AI agent (an AI model that can use tools) writes a to-do list of things to test.
+4. **Parallel testers:** one small AI tester per to-do item writes a browser test and runs it, all
+   at the same time.
+5. **Triage:** plain code, not AI, decides what each failure means. If a test also fails on the good
+   version, the test is wrong, so the tester fixes it (up to 3 tries). If it only fails on the new
+   version, it's a real bug.
+6. **Human approval:** the run pauses and asks a person to approve the findings.
+7. **Report:** write `report.md` with each bug, the proof, and how to reproduce it.
 
-The portal is served on `localhost:8000` automatically if it isn't already running
-(`python -m http.server 8000 --directory portal` works too). Every run writes `runs/<id>/`:
-snapshots, generated tests, pytest logs and `report.md`.
-
-## Architecture
+This is the real workflow (from `portalguard/graph.py`):
 
 ```mermaid
 flowchart TD
-    S([start]) --> snapshot["snapshot<br/>aria snapshot of every page + iframe<br/>(baseline and release)"]
-    snapshot -->|portal down| report
-    snapshot --> compare["compare<br/>diff per page / frame"]
-    compare --> planner["planner (LLM)<br/>write_todos: 5 journeys + diff checks"]
-    planner -->|"Send x N (parallel)"| journey["journey sub-agent (LLM)<br/>write_test → run_tests on release<br/>own fresh context"]
-    journey --> triage["triage (deterministic)<br/>baseline run → rerun → verdict"]
-    triage -->|"broken tests, heal attempts left<br/>(Send heal tasks)"| journey
-    triage -->|nothing left to heal| approve["approve<br/>interrupt(): human decision<br/>(skipped with --auto-approve)"]
-    approve --> report["report<br/>runs/&lt;id&gt;/report.md"]
+    S([start]) --> snapshot["snapshot<br/>pages + iframes, good and new"]
+    snapshot -->|portal not reachable| report
+    snapshot --> compare["compare<br/>what changed"]
+    compare --> planner["planner (AI)<br/>to-do list"]
+    planner -->|"one tester per to-do, in parallel"| journey["tester (AI)<br/>write test, run it"]
+    journey --> triage["triage (plain code)<br/>real bug or broken test?"]
+    triage -->|"broken tests: fix and retry"| journey
+    triage -->|done| approve["approve<br/>human says yes or no"]
+    approve --> report["report<br/>report.md"]
     report --> E([end])
-    ckpt[("SQLite checkpointer<br/>runs/checkpoints.sqlite")] -.- triage
-    ls[("LangSmith<br/>traces + experiments")] -.- journey
 ```
 
-| File | Role |
+## What each tool does
+
+| Tool | Its job here |
 |---|---|
-| `portalguard/graph.py` | `StateGraph`, nodes, conditional edges, `Send` fan-out, `interrupt` |
-| `portalguard/agents.py` | planner (`write_todos`), journey sub-agent loop, safety checks between model and tools |
-| `portalguard/tools.py` | LangChain `@tool`s: `snapshot_page`, `compare_snapshots`, `write_test`, `run_tests` |
-| `portalguard/llm.py` | `ChatOpenAI` (gpt-4.1-mini, temperature 0), `ScriptedChatModel` for mock, retries, cost |
-| `portalguard/triage.py`, `coverage.py` | baseline-as-oracle verdicts, journey coverage rules (ported from v1) |
-| `portalguard/browser.py` | Playwright aria snapshots + diff, AST checks, pytest/JUnit runner |
-| `portalguard/fixtures.py` | pytest plugin for generated tests: synthetic patient, `signed_in`, localhost route guard |
-| `evals/` | answer key, deterministic scoring, LangSmith dataset + experiment |
+| **LangChain** | Connects to the AI model (OpenAI's gpt-4.1-mini) and gives it tools: take a snapshot, compare snapshots, write a test, run tests. |
+| **LangGraph** | Runs the workflow above: the steps, running testers in parallel, the pause for human approval, and saving progress so a run can resume. |
+| **LangSmith** | Records every step of every run (tracing) so you can see what the AI did, and scores the agent against known bugs (evals). |
 
-## How each requirement maps to the stack
+## Quick start
 
-| Requirement | Where | Stack piece |
-|---|---|---|
-| LLM | `llm.make_model` | `langchain_openai.ChatOpenAI(model="gpt-4.1-mini", temperature=0)` |
-| Tools | `tools.py` | `@tool` with pydantic schemas; harness-owned args are `InjectedToolArg` (the model can't see or set them) |
-| Mock mode ($0, no key) | `llm.ScriptedChatModel`, `mock.py` | a real `BaseChatModel` subclass, so graph, tools and tracing are identical in both modes |
-| QE loop | `graph.py` | `StateGraph`: snapshot → compare → planner → journeys → triage → heal / approve → report |
-| Triage decides heal vs report | `graph.after_triage` | conditional edge returning `Send` heal tasks or `"approve"` |
-| Deep-agent pattern | `agents.plan_with_llm`, `graph.fan_out` | planner writes a to-do list (`write_todos`); one sub-agent per to-do with its own small context; big data stays on disk, summaries in context |
-| Parallel sub-agents | `graph.fan_out` | `Send` API, `max_concurrency=4` |
-| Run dependencies | `agents.RunContext` | LangGraph `Runtime` context (model, budget): not checkpointed |
-| State + resume | `main.checkpointer` | `SqliteSaver` (thread id = run id) |
-| Human in the loop | `graph.approve`, `main.resume_qe` | `interrupt()` + `Command(resume=...)`; `--auto-approve` for CI/evals |
-| API retries | `llm.with_api_retries` | `Runnable.with_retry` on transient OpenAI errors only |
-| Observability | `tracing.py` | LangSmith tracing on every run (nodes, LLM calls, tools, `@traceable` pytest runs) with run name, tags and metadata, all in one project (`LANGSMITH_PROJECT`), eval runs included |
-| Evals | `evals/run_eval.py` | LangSmith dataset `portalguard-releases` + `evaluate()` experiment with deterministic evaluators |
-| iframe a11y diff | `browser.take_snapshot` | Playwright `aria_snapshot()` of body + every frame, keyed by iframe id |
-| CI | `.github/workflows/qe.yml` | unit tests + mock eval gate on every push; real eval by hand |
+You need Python 3.12. "Mock mode" uses a fake, scripted AI, so it's free and needs no API key.
 
-## Safety design
+**Windows (PowerShell):**
 
-Every rule runs in code between the model and the world, and each has a unit test in `tests/unit/`.
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m playwright install chromium
+python -m portalguard.main --mock --auto-approve
+```
 
-| Rule | How | Test |
-|---|---|---|
-| Step / token / cost budget | `safety.Budget`, shared by all sub-agents (thread-safe), checked **before** every LLM call: 40 steps, 300k tokens, $0.25 per run, 5 calls per sub-agent | `test_budget.py` |
-| Localhost-only allowlist | `check_url` in the CLI, the snapshot node and the tools, plus a browser route guard that aborts any non-localhost request from generated tests | `test_allowlist.py` |
-| Argument validation | pydantic tool schemas (`journey` is an enum, filename pattern, max sizes); a sub-agent may only write and run *its own* file for *its own* journey; AST checks on test code (allowed imports only, no `exec`/`eval`/`open`/dunders) | `test_arg_validation.py` |
-| Baseline-as-oracle | a failing test first runs on the last good release: fails there too → `broken_test` (heal it, max 3); passes there → rerun on the release → `flaky` or `real_bug`. A test that proved a bug is **locked**: rewrites of it are refused | `test_oracle_lock.py` |
-| Coverage check | a journey test must exercise its journey (a download test must click, `expect_download()` and check the filename); the planner's plan must contain all 5 journeys (missing ones are added) | `test_coverage.py` |
-| API retries | transient errors (connection, timeout, 429, 5xx) retried with exponential backoff; other errors fail fast; a sub-agent's failure stops that sub-agent, not the run | `test_retries.py` |
-| Human approval | nothing is published before a human decides; no terminal → the run stays paused | `test_human_approval.py` |
+**macOS / Linux:**
 
-## Eval results
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install chromium
+python -m portalguard.main --mock --auto-approve
+```
 
-Dataset `portalguard-releases`: the buggy release (expected: the 4 planted bugs) and the good release
-(expected: nothing). Scoring is deterministic substring rules in `evals/expected_bugs.json`, with no
-LLM judge.
+The tool starts the practice portal for you at http://localhost:8000/ and tests the buggy version.
+The report lands in `runs/<run id>/report.md`.
 
-| Run | Recall | Precision | False alarms on good | LLM steps | Tokens | Cost |
-|---|---|---|---|---|---|---|
-| Mock (CI gate) | 100% (4/4) | 100% | 0 | 34 | 28.9k (estimated) | $0 |
-| gpt-4.1-mini, run 1 (LangSmith `portalguard-real-2ca49ffe`) | 75% (3/4) | 100% | 0 | 57 | 79.6k | $0.044 |
-| gpt-4.1-mini, run 2, after prompt fix (`portalguard-real-8eee9e05`) | 75% (3/4) | 100% | 0 | 65 | 111.1k | $0.062 |
-| **gpt-4.1-mini, run 3, same prompts** (`portalguard-real-0c82d801`) | **75% (3/4)** | **100%** | **0** | 56 | 88.4k | **$0.048** |
+Other commands:
 
-QE run traces (every node, LLM call, tool call and pytest run) are in the LangSmith project
-`portalguard-langgraph`, for both CLI and eval runs (run 3 onwards for evals). The experiment holds
-the scores, plus each run's `run_id` to find its trace.
+```bash
+python -m portalguard.main --mock                   # same, but asks you to approve the report
+python -m portalguard.main --mock --release good    # test the good version (should find no bugs)
+python -m pytest tests/unit -q                      # unit tests for the safety rules
+python -m evals.run_eval --local                    # score the agent against the 4 planted bugs
+```
 
-All three real runs missed BUG-3 (the iframe heading), each for a different reason:
+To use the real AI model, copy `.env.example` to `.env`, add your `OPENAI_API_KEY` (and optionally
+`LANGSMITH_API_KEY` for tracing), then run `python -m portalguard.main --real`.
 
-- **Run 1:** the lab-results sub-agent took the diff line `REMOVED: heading "Lab results"` as the
-  new spec, so it skipped the heading. It also called `expect()` on a FrameLocator, so the test failed
-  on the baseline.
-- **Prompt fix:** REMOVED lines exist on the baseline and must be tested; valid `expect()` targets.
-- **Run 2:** the fix worked. The test now checks the heading correctly inside the frame. But its last
-  line, `to_have_count(lambda c: c >= 1)`, is invalid (Playwright takes an int), so the test still
-  failed on the baseline. The model kept that line through all 3 heals.
-- **Run 3:** a diff check did check the iframe heading correctly. But it checked the appointments
-  heading (BUG-2) first, and pytest stops at the first failure, so the test only proved BUG-2. The
-  lab-results journey test used a made-up CSS class and gave up after 3 heals.
+**Test patients** (fake data, in `portal/test-users.json`):
 
-Every time, the harness held up: no false bug, and broken tests went to "Needs human review". I
-stopped tuning here; this is a known limitation (see below). Details: `analysis.md` in
-`evals/history/2026-10-14-real-r1`, `-r2` and `-r3`.
+| Name | Email | Password | Patient ID (MRN) |
+|---|---|---|---|
+| Jordan Rivera | jordan.rivera@test.example | Test123! | TEST-000123 |
+| Casey Morgan | casey.morgan@test.example | Test456! | TEST-000456 |
+| Riley Nguyen | riley.nguyen@test.example | Test789! | TEST-000789 |
 
-## Healthcare notes
+## Results
 
-- Synthetic data only (`portal/test-users.json`: Jordan Rivera `TEST-000123`, plus two other test
-  users). Downloaded PDFs are stamped DEMO DATA.
-- The agent can only reach localhost, both in the harness and inside the browser.
-- Keys come only from `.env` (gitignored) and are never printed.
-- A real deployment would use Azure OpenAI (or another provider) under a HIPAA BAA with zero data
-  retention. LangSmith would be self-hosted, or would use input/output masking
-  (`LANGSMITH_HIDE_INPUTS` / `HIDE_OUTPUTS`), since traces contain page content.
-- Human approval before any report leaves the system fits a regulated release process: the reviewer
-  and their note are recorded in the report.
+The buggy version has 4 planted bugs. Here's how the agent scored with the real AI model
+(gpt-4.1-mini):
 
-## Limitations and next steps
+| Run | Recall | Precision | False alarms | Cost |
+|---|---|---|---|---|
+| Run 1 | 75% (3 of 4) | 100% | 0 | $0.044 |
+| Run 2 | 75% (3 of 4) | 100% | 0 | $0.062 |
+| Run 3 | 75% (3 of 4) | 100% | 0 | $0.048 |
 
-- **Known miss: BUG-3 (iframe heading) with gpt-4.1-mini, 0 of 3 real runs.** In two of them the
-  agent wrote a correct check for it, but another assertion in the same test hid it. In r2 an invalid
-  assertion failed on the baseline; in r3 an earlier assertion failed on the release, so pytest stopped
-  first. Possible fixes (not done): one diff line per diff-check test (or collect every failure), a
-  guaranteed diff check for every iframe diff, and an AST check for non-literal `to_have_count`
-  arguments.
-- In "Needs human review", the report quotes the release error for tests that gave up. For those,
-  the baseline error (stored as `baseline_error`) is the useful one.
-- The real model varies run to run; three real evals are a sample, not a benchmark. Next: 3–5 repeats
-  per prompt change, tracked as LangSmith experiments.
-- Parallel sub-agents only speed up the write-and-run phase. Triage's baseline runs and reruns are
-  sequential, so a mock run takes about 2 minutes either way. Triage could fan out per file too.
-- The planner's diff checks are capped at 2; a release with many diffs needs batching.
-- AST checks are a guardrail, not a sandbox: CI runners (or containers) are the isolation boundary.
-- No long-term memory across runs yet (v1 had baseline reuse and selector fixes); a LangGraph
-  `Store` is the natural place for it.
-- `deepagents` (LangChain's deep-agent package) could replace the hand-written planner/sub-agent
-  loop. I wrote it by hand here so every safety check stays visible and testable.
-- On a laptop, idle sleep (Windows Modern Standby) freezes browsers mid-run; runs keep the machine
-  awake while they work.
+- **Recall:** how many of the planted bugs it found.
+- **Precision:** how many of the bugs it reported were real.
+- **False alarms:** bugs it reported on the good version, which has none.
+- **Cost:** what the AI model cost for one run on both versions.
+
+Recall is 75% because the agent keeps missing the bug inside the lab results iframe. It writes a
+check for that bug, but another mistake in the same test hides the result.
+
+(Mock mode finds all 4 bugs with no false alarms, and that's checked on every push.)
+
+## Safety and healthcare
+
+- **Fake patient data only:** the three test patients above are made up.
+- **Local website only:** the agent and its tests can only visit `localhost`, never the internet.
+- **Human approval before reporting:** nothing is reported until a person approves it.
+- **Budget limits:** each run stops at 40 AI calls, 300,000 tokens, or $0.25, whichever comes first.
+
+## Project layout
+
+```
+portal/
+  good/                  the last good version of the patient portal
+  buggy/                 the new version, with 4 planted bugs
+  test-users.json        the 3 fake test patients
+portalguard/
+  main.py                command line: run the agent on a version
+  graph.py               the LangGraph workflow (the steps above)
+  agents.py              the planner and the testers
+  tools.py               the tools the AI can use
+  llm.py                 the AI model (real or fake)
+  mock.py                the fake AI's scripted answers
+  browser.py             browser snapshots and running tests
+  triage.py              decides real bug vs broken test
+  coverage.py            checks each test really tests its journey
+  safety.py              budget limits and the localhost-only rule
+  fixtures.py            shared setup for the generated tests
+  report.py              writes report.md
+  tracing.py             LangSmith tracing setup
+  config.py              settings: model, budgets, paths
+evals/
+  expected_bugs.json     the answer key (the 4 planted bugs)
+  scoring.py             recall, precision, false alarms
+  run_eval.py            runs the agent on both versions and scores it
+  history/               saved results from the real runs
+tests/unit/              one test per safety rule, plus scoring
+.github/workflows/qe.yml CI: runs the unit tests and the mock eval on every push
+runs/                    each run's snapshots, tests and report (not in git)
+```
